@@ -11,6 +11,12 @@ import json
 import httpx
 import psycopg
 from psycopg.rows import dict_row
+from reportlab.lib.pagesizes import LETTER
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
+from reportlab.lib.units import inch
+from io import BytesIO
 
 app = FastAPI(title="UNG-NEPTUNE", version="0.1.0")
 
@@ -326,7 +332,7 @@ th,td{{border:1px solid #aaa;padding:8px;text-align:left;font-size:12px}}th{{wid
 .toolbar{{position:fixed;right:18px;top:18px}}button{{padding:9px 12px;font-weight:700}}
 @media print{{.toolbar{{display:none}}.doc{{padding:0}}}}
 </style></head><body>
-<div class="toolbar"><button onclick="window.print()">Print / Save PDF</button></div>
+<div class="toolbar"><button onclick="window.print()">Print</button> <a href="#" onclick="window.location.href=window.location.pathname+'/pdf';return false;" style="display:inline-block;padding:9px 12px;font-weight:700;background:#eee;color:#111;border-radius:6px;text-decoration:none">Save PDF</a></div>
 <div class="doc">
 <div class="hdr"><img src="/presidential-seal" alt="Presidential Seal"><div class="gov"><div class="country">REPUBLIC OF UGANDA</div><div class="agency">{html.escape(agency)}</div><div class="sub">{html.escape(subagency)}</div></div><div></div></div>
 <div class="class">{html.escape(classification)}</div>
@@ -512,6 +518,148 @@ def document_registry():
                      "url":f"/documents/audit/{a['id']}"})
     docs.sort(key=lambda x:x["created_at"], reverse=True)
     return docs[:300]
+
+def _seal_bytes():
+    page = home().body.decode("utf-8")
+    m = re.search(r'class="brand-seal" src="data:image/png;base64,([^"]+)"', page)
+    return base64.b64decode(m.group(1)) if m else None
+
+def build_official_pdf(*, agency_key: str, title: str, reference: str, classification: str,
+                       body: str, recipient: str = "", status: str = "", metadata: dict | None = None):
+    buf=BytesIO()
+    doc=SimpleDocTemplate(buf,pagesize=LETTER,rightMargin=42,leftMargin=42,topMargin=36,bottomMargin=42)
+    styles=getSampleStyleSheet()
+    story=[]
+    agency,subagency=document_agency(agency_key)
+
+    seal=_seal_bytes()
+    if seal:
+        seal_img=RLImage(BytesIO(seal),width=0.78*inch,height=0.78*inch)
+    else:
+        seal_img=Paragraph("",styles["Normal"])
+
+    header_text=Paragraph(
+        f"<b>REPUBLIC OF UGANDA</b><br/><font size='14'><b>{html.escape(agency)}</b></font><br/>"
+        f"<font size='9'>{html.escape(subagency)}</font>",
+        styles["Normal"]
+    )
+    ht=Table([[seal_img,header_text,""]],colWidths=[0.95*inch,5.7*inch,0.45*inch])
+    ht.setStyle(TableStyle([
+        ("VALIGN",(0,0),(-1,-1),"MIDDLE"),
+        ("ALIGN",(1,0),(1,0),"CENTER"),
+        ("LINEBELOW",(0,0),(-1,-1),2,colors.black),
+        ("BOTTOMPADDING",(0,0),(-1,-1),10),
+    ]))
+    story += [ht,Spacer(1,12)]
+
+    class_tbl=Table([[Paragraph(f"<b>{html.escape(classification)}</b>",styles["Normal"])]],colWidths=[7.0*inch])
+    class_tbl.setStyle(TableStyle([
+        ("BOX",(0,0),(-1,-1),1.5,colors.black),
+        ("ALIGN",(0,0),(-1,-1),"CENTER"),
+        ("TOPPADDING",(0,0),(-1,-1),8),("BOTTOMPADDING",(0,0),(-1,-1),8),
+    ]))
+    story += [class_tbl,Spacer(1,16),Paragraph(f"<b>{html.escape(title)}</b>",styles["Title"]),Spacer(1,10)]
+
+    data=[["Reference / Tracking No.", reference]]
+    if recipient: data.append(["Recipient",recipient])
+    if status: data.append(["Status",status])
+    for k,v in (metadata or {}).items():
+        if v not in (None,""): data.append([str(k),str(v)])
+    meta_tbl=Table(data,colWidths=[2.25*inch,4.75*inch],repeatRows=0)
+    meta_tbl.setStyle(TableStyle([
+        ("GRID",(0,0),(-1,-1),0.6,colors.grey),
+        ("BACKGROUND",(0,0),(0,-1),colors.whitesmoke),
+        ("FONTNAME",(0,0),(0,-1),"Helvetica-Bold"),
+        ("VALIGN",(0,0),(-1,-1),"TOP"),
+        ("TOPPADDING",(0,0),(-1,-1),7),("BOTTOMPADDING",(0,0),(-1,-1),7),
+    ]))
+    story += [meta_tbl,Spacer(1,16)]
+
+    for para in str(body or "").split("\n"):
+        story.append(Paragraph(html.escape(para) if para else "&nbsp;",styles["BodyText"]))
+        story.append(Spacer(1,4))
+
+    story += [Spacer(1,18),Table([["Official NEPTUNE document · Automatically branded",reference]],colWidths=[5.3*inch,1.7*inch],style=[
+        ("LINEABOVE",(0,0),(-1,-1),0.7,colors.grey),
+        ("FONTSIZE",(0,0),(-1,-1),8),
+        ("ALIGN",(1,0),(1,0),"RIGHT"),
+        ("TOPPADDING",(0,0),(-1,-1),6)
+    ])]
+    doc.build(story)
+    return buf.getvalue()
+
+def _document_payload(kind: str, record_id: int):
+    if kind=="directive":
+        d=one("""SELECT id,directive_no,title,directive_type,recipient,priority,classification,directive_text,
+                        status,status_actor,issued_at,updated_at FROM executive_directives WHERE id=%s""",(record_id,))
+        if not d: return None
+        return dict(agency_key="presidential",title=d["title"],reference=d["directive_no"],classification=d["classification"],
+                    recipient=d["recipient"],status=d["status"],body=d["directive_text"],
+                    metadata={"Document Type":d["directive_type"].replace("_"," ").title(),"Priority":d["priority"].upper(),
+                              "Issued":d["issued_at"],"Last Updated":d["updated_at"],"Status Authority":d["status_actor"] or ""})
+    if kind=="message":
+        m=one("""SELECT id,message_no,recipient,subject,message_text,classification,status,created_at
+                 FROM command_messages WHERE id=%s""",(record_id,))
+        if not m: return None
+        return dict(agency_key="executive",title=m["subject"],reference=m["message_no"],classification=m["classification"],
+                    recipient=m["recipient"],status=m["status"],body=m["message_text"],
+                    metadata={"Document Type":"Secure Command Message","Issued":m["created_at"]})
+    if kind=="task":
+        t=one("SELECT id,title,owner,domain,priority,status,created_at,updated_at FROM tasks WHERE id=%s",(record_id,))
+        if not t: return None
+        agency_key=t["domain"] if t["domain"] in ("air","land","maritime") else "updf"
+        return dict(agency_key=agency_key,title=t["title"],reference=f"TASK-{t['id']:06d}",classification="RESTRICTED",
+                    recipient=t["owner"],status=t["status"],body="Operational tasking record generated by UNG-NEPTUNE.",
+                    metadata={"Domain":t["domain"].upper(),"Priority":t["priority"].upper(),"Created":t["created_at"],"Updated":t["updated_at"]})
+    if kind=="event":
+        e=one("""SELECT id,domain,type,title,source,confidence,classification,releasability,created_at,latitude,longitude
+                 FROM events WHERE id=%s""",(record_id,))
+        if not e: return None
+        agency_key=e["domain"] if e["domain"] in ("air","land","maritime") else "nsc"
+        return dict(agency_key=agency_key,title=e["title"],reference=f"EVT-{e['id']:06d}",classification=e["classification"],status="RECORDED",
+                    body=f"Source: {e['source']}\nEvent type: {e['type']}\nReleasability: {e['releasability']}",
+                    metadata={"Domain":e["domain"].upper(),"Confidence":f"{round(float(e['confidence'] or 0)*100)}%",
+                              "Recorded":e["created_at"],"Latitude":e["latitude"],"Longitude":e["longitude"]})
+    if kind=="readiness":
+        r=one("SELECT id,name,category,status,note,created_at FROM readiness WHERE id=%s",(record_id,))
+        if not r:return None
+        return dict(agency_key="updf",title=f"Readiness Report — {r['name']}",reference=f"RDY-{r['id']:06d}",classification="RESTRICTED",
+                    status=r["status"].upper(),body=r["note"] or "No additional readiness note.",
+                    metadata={"Category":r["category"].upper(),"Recorded":r["created_at"]})
+    if kind=="comms":
+        r=one("SELECT id,link,status,latency_ms,note,created_at FROM comms WHERE id=%s",(record_id,))
+        if not r:return None
+        return dict(agency_key="defence",title=f"Communications Status — {r['link']}",reference=f"COM-{r['id']:06d}",classification="RESTRICTED",
+                    status=r["status"].upper(),body=r["note"] or "No additional communications note.",
+                    metadata={"Latency":f"{r['latency_ms']} ms" if r["latency_ms"] is not None else "Not reported","Recorded":r["created_at"]})
+    if kind=="alert":
+        a=one("""SELECT id,title,severity,source,category,related_id,details,status,acknowledged_by,acknowledged_at,created_at
+                 FROM alerts WHERE id=%s""",(record_id,))
+        if not a:return None
+        agency_key="nsc" if a["category"] in ("system","zone","track") else "executive"
+        return dict(agency_key=agency_key,title=a["title"],reference=f"ALT-{a['id']:06d}",classification="RESTRICTED",status=a["status"].upper(),
+                    body=a["details"] or "No additional alert details.",
+                    metadata={"Severity":a["severity"].upper(),"Category":a["category"].upper(),"Source":a["source"],"Related ID":a["related_id"] or "",
+                              "Created":a["created_at"],"Acknowledged By":a["acknowledged_by"] or "","Acknowledged At":a["acknowledged_at"] or ""})
+    if kind=="audit":
+        a=one("SELECT id,action,entity_type,entity_id,details,created_at FROM audit_log WHERE id=%s",(record_id,))
+        if not a:return None
+        return dict(agency_key="executive",title="Audit & Accountability Record",reference=f"AUD-{a['id']:06d}",classification="RESTRICTED",
+                    status="RECORDED",body=json.dumps(a["details"] or {},indent=2,default=str),
+                    metadata={"Action":a["action"],"Entity Type":a["entity_type"],"Entity ID":a["entity_id"] or "","Recorded":a["created_at"]})
+    return None
+
+@app.get("/documents/{kind}/{record_id}/pdf")
+def document_pdf(kind: str, record_id: int):
+    payload=_document_payload(kind,record_id)
+    if not payload:
+        return Response("Document not found",status_code=404,media_type="text/plain")
+    pdf=build_official_pdf(**payload)
+    filename=re.sub(r"[^A-Za-z0-9._-]+","_",payload["reference"])+".pdf"
+    return Response(pdf,media_type="application/pdf",headers={
+        "Content-Disposition":f'attachment; filename="{filename}"',
+        "Cache-Control":"no-store, max-age=0"
+    })
 
 @app.get("/health")
 def health():
