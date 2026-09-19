@@ -282,7 +282,7 @@ main{padding:20px}.right{background:#091827;border-left:1px solid #20364b;paddin
 .map{height:430px;border:1px solid #31506b;border-radius:14px;position:relative;overflow:hidden;background:#0a2034}
 .map-title{position:absolute;top:15px;left:50px;color:#e4c76d;background:#07111ddd;padding:7px 10px;border-radius:7px;font:700 12px Arial;letter-spacing:1px;z-index:600}
 .leaflet-container{background:#0a2034}.leaflet-control-attribution{font-size:9px}
-.domains{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}.domains button{background:#10283f;color:#dce7f0;border:1px solid #304b64;border-radius:8px;padding:8px 11px;cursor:pointer}.domains button.active{border-color:#d1b45a;color:#f4d577}
+.domains{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap;align-items:center}.domains button{background:#10283f;color:#dce7f0;border:1px solid #304b64;border-radius:8px;padding:8px 11px;cursor:pointer}.domains button.active{border-color:#d1b45a;color:#f4d577}.sim-toggle{margin-left:auto;border-color:#5b4b88!important}.sim-toggle.active{background:#2a1f49!important;color:#d9c9ff!important;border-color:#9b7be5!important}.sim-badge{position:absolute;top:15px;right:15px;z-index:650;background:#4a245dcc;color:#f3d9ff;border:1px solid #a56ac2;border-radius:7px;padding:6px 9px;font:700 11px Arial;letter-spacing:1px;display:none}.sim-badge.show{display:block}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}.panel h3{margin:0 0 10px;color:#f0d071}.row{padding:9px 0;border-bottom:1px solid #23394d;font-size:12px}.muted{color:#91a6b7}
 .alert{padding:10px;border:1px solid #30475b;background:#0d2032;border-radius:9px;margin-bottom:9px;font-size:12px}.good{color:#9fd6ad}.warn{color:#f0d071}.bad{color:#ff9b9b}
 input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px solid #334a61;border-radius:7px;padding:9px;margin:5px 0 9px}textarea{min-height:70px}
@@ -302,7 +302,7 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 
 <section id="cop" class="view active">
 <div class="domains" id="domains"></div>
-<div class="map" id="map"><div class="map-title" id="mapTitle">JOINT COMMON OPERATING PICTURE</div></div>
+<div class="map" id="map"><div class="map-title" id="mapTitle">JOINT COMMON OPERATING PICTURE</div><div class="sim-badge" id="simBadge">SIMULATION MODE</div></div>
 <div class="grid">
 <div class="panel"><h3>Command & Task Queue</h3><div id="taskPreview"></div></div>
 <div class="panel"><h3>Communications Health</h3><div id="commPreview"></div></div>
@@ -339,8 +339,16 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 
 <script>
 let selectedDomain='joint';
+let simulationMode=false;
 const domains=['joint','land','air','maritime','space','cyber','civilian'];
-let map, mapMarkers=[];
+let map, mapMarkers=[], simMarkers=[], simTrails=[];
+const simulatedObjects=[
+ {id:'SIM-AIR-01',kind:'Aircraft',domain:'air',lat:1.20,lon:32.95,altitude_ft:18500,speed_kt:310,heading:125,status:'training'},
+ {id:'SIM-UAS-07',kind:'UAS',domain:'air',lat:0.70,lon:32.40,altitude_ft:6200,speed_kt:95,heading:60,status:'training'},
+ {id:'SIM-HELO-03',kind:'Helicopter',domain:'air',lat:0.15,lon:31.95,altitude_ft:2400,speed_kt:120,heading:20,status:'training'},
+ {id:'SIM-BAL-02',kind:'Balloon',domain:'air',lat:1.55,lon:33.35,altitude_ft:45000,speed_kt:25,heading:210,status:'training'},
+ {id:'SIM-SAT-11',kind:'Satellite',domain:'space',lat:2.10,lon:34.10,altitude_ft:1320000,speed_kt:14500,heading:295,status:'training'}
+];
 const OFFLINE_KEY='neptune_offline_queue_v1';
 function queued(){try{return JSON.parse(localStorage.getItem(OFFLINE_KEY)||'[]')}catch(e){return []}}
 function saveQueue(q){localStorage.setItem(OFFLINE_KEY,JSON.stringify(q));document.getElementById('offlineQueue').textContent=q.length+' pending'}
@@ -365,8 +373,35 @@ async function api(url,opts){
 function showView(id){document.querySelectorAll('.view').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active');document.querySelectorAll('#nav button').forEach(x=>x.classList.toggle('active',x.dataset.view===id))}
 document.querySelectorAll('#nav button').forEach(b=>b.onclick=()=>showView(b.dataset.view));
 
-function renderDomains(){document.getElementById('domains').innerHTML=domains.map(d=>`<button class="${d===selectedDomain?'active':''}" onclick="selectDomain('${d}')">${d==='civilian'?'CIVILIAN ICS':d.toUpperCase()}</button>`).join('')}
-function selectDomain(d){selectedDomain=d;document.getElementById('selectedDomain').textContent=d.toUpperCase();document.getElementById('mapTitle').textContent=(d==='joint'?'JOINT':d.toUpperCase())+' COMMON OPERATING PICTURE';renderDomains();refreshEvents()}
+function renderDomains(){document.getElementById('domains').innerHTML=domains.map(d=>`<button class="${d===selectedDomain?'active':''}" onclick="selectDomain('${d}')">${d==='civilian'?'CIVILIAN ICS':d.toUpperCase()}</button>`).join('')+`<button class="sim-toggle ${simulationMode?'active':''}" onclick="toggleSimulation()">${simulationMode?'SIMULATION ON':'SIMULATION OFF'}</button>`}
+function selectDomain(d){selectedDomain=d;document.getElementById('selectedDomain').textContent=d.toUpperCase();document.getElementById('mapTitle').textContent=(d==='joint'?'JOINT':d.toUpperCase())+' COMMON OPERATING PICTURE';renderDomains();refreshEvents();renderSimulation()}
+
+function simColor(kind){
+ if(kind==='Satellite') return '#c27cff';
+ if(kind==='Aircraft') return '#5fd7ff';
+ if(kind==='UAS') return '#7dff94';
+ if(kind==='Helicopter') return '#ffd166';
+ return '#ff77c8';
+}
+function renderSimulation(){
+ simMarkers.forEach(m=>map.removeLayer(m));simMarkers=[];
+ simTrails.forEach(m=>map.removeLayer(m));simTrails=[];
+ document.getElementById('simBadge').classList.toggle('show',simulationMode);
+ if(!simulationMode) return;
+ const visible=simulatedObjects.filter(o=>selectedDomain==='joint'||o.domain===selectedDomain||(selectedDomain==='space'&&o.kind==='Satellite'));
+ visible.forEach(o=>{
+   const c=simColor(o.kind);
+   const trailLen=o.kind==='Satellite'?2.0:.45;
+   const p1=[o.lat,o.lon];
+   const p2=[o.lat-(Math.cos(o.heading*Math.PI/180)*trailLen),o.lon-(Math.sin(o.heading*Math.PI/180)*trailLen)];
+   const trail=L.polyline([p2,p1],{color:c,weight:2,opacity:.65,dashArray:'6,6'}).addTo(map);simTrails.push(trail);
+   const marker=L.circleMarker(p1,{radius:o.kind==='Satellite'?9:7,color:c,fillColor:c,fillOpacity:.75,weight:2}).addTo(map)
+     .bindPopup('<b>'+o.id+'</b><br>SIMULATED '+o.kind.toUpperCase()+'<br>Altitude: '+o.altitude_ft.toLocaleString()+' ft<br>Speed: '+o.speed_kt.toLocaleString()+' kt<br>Heading: '+o.heading+'°<br><span style="color:#c27cff">TRAINING / SIMULATION ONLY</span>');
+   simMarkers.push(marker);
+ });
+}
+function toggleSimulation(){simulationMode=!simulationMode;renderDomains();renderSimulation()}
+
 
 async function refreshEvents(){
  const events=await api('/api/events'); const filtered=selectedDomain==='joint'?events:events.filter(e=>e.domain===selectedDomain||e.domain==='joint');
@@ -376,6 +411,7 @@ async function refreshEvents(){
  document.getElementById('eventLedger').innerHTML=[...events].reverse().slice(0,30).map(e=>`<div class="row"><b>${e.title}</b><br><span class="muted">${e.domain} · ${e.type} · confidence ${Math.round((e.confidence||0)*100)}%</span></div>`).join('');
  mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
  filtered.filter(e=>e.latitude!=null&&e.longitude!=null).forEach(e=>{const m=L.circleMarker([e.latitude,e.longitude],{radius:7,weight:2,fillOpacity:.45}).addTo(map).bindPopup('<b>'+e.title+'</b><br>'+e.domain.toUpperCase()+' · '+e.type);mapMarkers.push(m)});
+ renderSimulation();
 }
 async function refreshTasks(){
  const a=await api('/api/tasks');
@@ -396,6 +432,6 @@ document.getElementById('readinessForm').onsubmit=async e=>{e.preventDefault();c
 document.getElementById('commForm').onsubmit=async e=>{e.preventDefault();const o=Object.fromEntries(new FormData(e.target));if(o.latency_ms==='')o.latency_ms=null;else o.latency_ms=Number(o.latency_ms);await api('/api/comms',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});e.target.reset();refreshComms()}
 document.getElementById('eventForm').onsubmit=async e=>{e.preventDefault();const o=Object.fromEntries(new FormData(e.target));o.confidence=Number(o.confidence);o.x=null;o.y=null;o.latitude=o.latitude===''?null:Number(o.latitude);o.longitude=o.longitude===''?null:Number(o.longitude);o.classification='UNCLASSIFIED';o.releasability='INTERNAL';await api('/api/events',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(o)});e.target.reset();e.target.confidence.value=1;refreshEvents()}
 async function refreshIntegrations(){const x=await api('/api/integrations');for(const n of ['iam','vault']){const e=x[n],el=document.getElementById(n+'Status');el.innerHTML=e.online?'<span class="good">ONLINE</span> · connected':'<span class="bad">OFFLINE</span> · '+(e.configured?'configured':'not configured')}}
-initMap();renderDomains();saveQueue(queued());Promise.all([refreshEvents(),refreshTasks(),refreshReadiness(),refreshComms(),refreshIntegrations()]);flushOffline();
+initMap();renderDomains();renderSimulation();saveQueue(queued());Promise.all([refreshEvents(),refreshTasks(),refreshReadiness(),refreshComms(),refreshIntegrations()]);flushOffline();
 setInterval(()=>Promise.all([refreshEvents(),refreshTasks(),refreshReadiness(),refreshComms(),refreshIntegrations()]),5000);
 </script></body></html>""")
