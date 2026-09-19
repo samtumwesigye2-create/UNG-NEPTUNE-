@@ -4,6 +4,9 @@ from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Literal, Optional
 import os
+import base64
+import re
+import html
 import json
 import httpx
 import psycopg
@@ -278,6 +281,134 @@ def audit(action, entity_type, entity_id=None, details=None):
         with conn.cursor() as cur:
             cur.execute("INSERT INTO audit_log(action,entity_type,entity_id,details) VALUES(%s,%s,%s,%s::jsonb)",
                         (action, entity_type, str(entity_id) if entity_id is not None else None, json.dumps(details or {})))
+
+DOCUMENT_AGENCIES = {
+    "presidential": ("OFFICE OF THE PRESIDENT", "COMMANDER-IN-CHIEF"),
+    "defence": ("MINISTRY OF DEFENCE", "UGANDA PEOPLES' DEFENCE FORCES"),
+    "updf": ("UGANDA PEOPLES' DEFENCE FORCES", "GENERAL HEADQUARTERS"),
+    "nsc": ("NATIONAL SECURITY COUNCIL", "EXECUTIVE SECURITY COORDINATION"),
+    "state_house": ("STATE HOUSE", "EXECUTIVE OFFICE"),
+    "executive": ("EXECUTIVE OFFICE OF THE PRESIDENT", "NATIONAL COMMAND AUTHORITY"),
+    "air": ("UGANDA PEOPLES' DEFENCE FORCES", "AIR FORCE"),
+    "land": ("UGANDA PEOPLES' DEFENCE FORCES", "LAND FORCES"),
+    "maritime": ("UGANDA PEOPLES' DEFENCE FORCES", "MARITIME / LAKE SECURITY"),
+}
+
+def document_agency(key: str):
+    return DOCUMENT_AGENCIES.get(key, DOCUMENT_AGENCIES["executive"])
+
+def official_document_html(*, agency_key: str, title: str, reference: str, classification: str,
+                           body: str, recipient: str = "", status: str = "", metadata: dict | None = None):
+    agency, subagency = document_agency(agency_key)
+    meta = metadata or {}
+    rows_html = "".join(
+        f"<tr><th>{html.escape(str(k))}</th><td>{html.escape(str(v))}</td></tr>"
+        for k,v in meta.items() if v not in (None,"")
+    )
+    recipient_html = f"<tr><th>Recipient</th><td>{html.escape(recipient)}</td></tr>" if recipient else ""
+    status_html = f"<tr><th>Status</th><td>{html.escape(status)}</td></tr>" if status else ""
+    return f"""<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>{html.escape(reference)} · {html.escape(title)}</title>
+<style>
+@page{{margin:18mm 16mm 20mm}}
+body{{font-family:Arial,sans-serif;color:#111;background:#fff;margin:0}}
+.doc{{max-width:900px;margin:0 auto;padding:28px}}
+.hdr{{display:grid;grid-template-columns:90px 1fr 90px;align-items:center;border-bottom:3px solid #111;padding-bottom:14px}}
+.hdr img{{width:78px;height:78px;object-fit:contain}}
+.gov{{text-align:center;line-height:1.25}}.gov .country{{font:700 15px Georgia;letter-spacing:1.5px}}
+.gov .agency{{font-weight:800;font-size:18px;margin-top:4px}}.gov .sub{{font-size:12px;letter-spacing:1px;margin-top:3px}}
+.class{{text-align:center;font-weight:900;letter-spacing:1.5px;border:2px solid #111;padding:7px;margin:18px 0}}
+h1{{font:700 24px Georgia;margin:18px 0 10px;text-align:center}}table{{width:100%;border-collapse:collapse;margin:14px 0}}
+th,td{{border:1px solid #aaa;padding:8px;text-align:left;font-size:12px}}th{{width:190px;background:#f2f2f2}}
+.body{{white-space:pre-wrap;line-height:1.55;font-size:14px;min-height:280px;margin-top:18px}}
+.footer{{border-top:1px solid #777;margin-top:30px;padding-top:8px;font-size:10px;display:flex;justify-content:space-between}}
+.toolbar{{position:fixed;right:18px;top:18px}}button{{padding:9px 12px;font-weight:700}}
+@media print{{.toolbar{{display:none}}.doc{{padding:0}}}}
+</style></head><body>
+<div class="toolbar"><button onclick="window.print()">Print / Save PDF</button></div>
+<div class="doc">
+<div class="hdr"><img src="/presidential-seal" alt="Presidential Seal"><div class="gov"><div class="country">REPUBLIC OF UGANDA</div><div class="agency">{html.escape(agency)}</div><div class="sub">{html.escape(subagency)}</div></div><div></div></div>
+<div class="class">{html.escape(classification)}</div>
+<h1>{html.escape(title)}</h1>
+<table><tr><th>Reference / Tracking No.</th><td>{html.escape(reference)}</td></tr>{recipient_html}{status_html}{rows_html}</table>
+<div class="body">{html.escape(body)}</div>
+<div class="footer"><span>Official NEPTUNE document · Automatically branded</span><span>{html.escape(reference)}</span></div>
+</div></body></html>"""
+
+@app.get("/presidential-seal")
+def presidential_seal():
+    # Reuse the already-approved seal embedded in the NEPTUNE header so every official document is identical.
+    page = home().body.decode("utf-8")
+    m = re.search(r'class="brand-seal" src="data:image/png;base64,([^"]+)"', page)
+    if not m:
+        return Response(status_code=404)
+    return Response(base64.b64decode(m.group(1)), media_type="image/png", headers={"Cache-Control":"public, max-age=86400"})
+
+@app.get("/api/document-policy")
+def document_policy():
+    return {
+        "mandatory_header":["Presidential Seal","Republic of Uganda","Issuing institution / military branch / executive agency"],
+        "mandatory_identity":["document title","reference or tracking number","classification","issuing authority","date/time","recipient","status"],
+        "agencies":DOCUMENT_AGENCIES,
+        "rule":"All generated, printable, and exported NEPTUNE records use the centralized official document header."
+    }
+
+@app.get("/documents/directive/{directive_id}", response_class=HTMLResponse)
+def directive_document(directive_id: int):
+    d=one("""SELECT id,directive_no,title,directive_type,recipient,priority,classification,directive_text,
+                    status,status_actor,issued_at,updated_at FROM executive_directives WHERE id=%s""",(directive_id,))
+    if not d:
+        return HTMLResponse("Document not found",status_code=404)
+    return HTMLResponse(official_document_html(
+        agency_key="presidential", title=d["title"], reference=d["directive_no"],
+        classification=d["classification"], recipient=d["recipient"], status=d["status"],
+        body=d["directive_text"],
+        metadata={"Document Type":d["directive_type"].replace("_"," ").title(),
+                  "Priority":d["priority"].upper(),"Issued":d["issued_at"],
+                  "Last Updated":d["updated_at"],"Status Authority":d["status_actor"] or ""}
+    ))
+
+@app.get("/documents/message/{message_id}", response_class=HTMLResponse)
+def message_document(message_id: int):
+    m=one("""SELECT id,message_no,recipient,subject,message_text,classification,status,created_at
+             FROM command_messages WHERE id=%s""",(message_id,))
+    if not m:
+        return HTMLResponse("Document not found",status_code=404)
+    return HTMLResponse(official_document_html(
+        agency_key="executive", title=m["subject"], reference=m["message_no"],
+        classification=m["classification"], recipient=m["recipient"], status=m["status"],
+        body=m["message_text"], metadata={"Document Type":"Secure Command Message","Issued":m["created_at"]}
+    ))
+
+@app.get("/documents/task/{task_id}", response_class=HTMLResponse)
+def task_document(task_id: int):
+    t=one("SELECT id,title,owner,domain,priority,status,created_at,updated_at FROM tasks WHERE id=%s",(task_id,))
+    if not t:
+        return HTMLResponse("Document not found",status_code=404)
+    agency_key=t["domain"] if t["domain"] in ("air","land","maritime") else "updf"
+    return HTMLResponse(official_document_html(
+        agency_key=agency_key, title=t["title"], reference=f"TASK-{t['id']:06d}",
+        classification="RESTRICTED", recipient=t["owner"], status=t["status"],
+        body="Operational tasking record generated by UNG-NEPTUNE.",
+        metadata={"Domain":t["domain"].upper(),"Priority":t["priority"].upper(),
+                  "Created":t["created_at"],"Updated":t["updated_at"]}
+    ))
+
+@app.get("/documents/event/{event_id}", response_class=HTMLResponse)
+def event_document(event_id: int):
+    e=one("""SELECT id,domain,type,title,source,confidence,classification,releasability,created_at,latitude,longitude
+             FROM events WHERE id=%s""",(event_id,))
+    if not e:
+        return HTMLResponse("Document not found",status_code=404)
+    agency_key=e["domain"] if e["domain"] in ("air","land","maritime") else "nsc"
+    return HTMLResponse(official_document_html(
+        agency_key=agency_key, title=e["title"], reference=f"EVT-{e['id']:06d}",
+        classification=e["classification"], status="RECORDED",
+        body=f"Source: {e['source']}\nEvent type: {e['type']}\nReleasability: {e['releasability']}",
+        metadata={"Domain":e["domain"].upper(),"Confidence":f"{round(float(e['confidence'] or 0)*100)}%",
+                  "Recorded":e["created_at"],"Latitude":e["latitude"],"Longitude":e["longitude"]}
+    ))
 
 @app.get("/health")
 def health():
@@ -791,7 +922,7 @@ async function refreshEvents(){
  document.getElementById('eventCount').textContent=events.length+' EVENTS';
  document.getElementById('criticalCount').textContent=events.filter(e=>e.type==='critical').length;
  document.getElementById('eventStream').innerHTML=[...filtered].reverse().slice(0,12).map(e=>`<div class="alert"><b>${e.title}</b><br><span class="muted">${e.domain.toUpperCase()} · ${e.type} · ${e.source}</span></div>`).join('')||'<div class="muted">No events in this domain.</div>';
- document.getElementById('eventLedger').innerHTML=[...events].reverse().slice(0,30).map(e=>`<div class="row"><b>${e.title}</b><br><span class="muted">${e.domain} · ${e.type} · confidence ${Math.round((e.confidence||0)*100)}%</span></div>`).join('');
+ document.getElementById('eventLedger').innerHTML=[...events].reverse().slice(0,30).map(e=>`<div class="row"><b>${e.title}</b><br><span class="muted">${e.domain} · ${e.type} · confidence ${Math.round((e.confidence||0)*100)}%</span><br><a class="action mini" target="_blank" href="/documents/event/${e.id}" style="text-decoration:none">Official Document</a></div>`).join('');
  mapMarkers.forEach(m=>map.removeLayer(m));mapMarkers=[];
  filtered.filter(e=>e.latitude!=null&&e.longitude!=null).forEach(e=>{const m=L.circleMarker([e.latitude,e.longitude],{radius:7,weight:2,fillOpacity:.45}).addTo(map).bindPopup('<b>'+e.title+'</b><br>'+e.domain.toUpperCase()+' · '+e.type);mapMarkers.push(m)});
  renderSimulation();
@@ -867,8 +998,8 @@ async function refreshExecutive(){
  document.getElementById('execAlerts').textContent=brief.active_alerts;
  document.getElementById('execCritical').textContent=brief.critical_alerts;
  document.getElementById('execTracks').textContent=brief.live_tracks;
- document.getElementById('directiveList').innerHTML=directives.length?directives.map(d=>`<div class="row directive-card directive-${d.status}"><span class="track-id">${d.directive_no}</span> <span class="pill">${d.status.toUpperCase()}</span><br><b>${d.title}</b><br><span class="muted">${d.directive_type.replaceAll('_',' ')} · ${d.priority} · ${d.classification}<br>To: ${d.recipient}</span><br><span class="muted">${d.directive_text}</span><br><div style="margin-top:6px">${d.status==='issued'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'acknowledged\')">Acknowledge</button> ':''}${['issued','acknowledged','planning','returned'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'planning\')">Planning</button> ':''}${['planning','returned'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'approved\')">Approve Plan</button> ':''}${['planning','approved'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'returned\')">Return</button> ':''}${d.status==='approved'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'executing\')">Execution Status</button> ':''}${d.status==='executing'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'complete\')">Complete</button>':''}</div></div>`).join(''):'<div class="muted">No executive directives yet.</div>';
- document.getElementById('commandMessageList').innerHTML=messages.length?messages.map(m=>`<div class="row"><span class="track-id">${m.message_no}</span><br><b>${m.subject}</b><br><span class="muted">${m.classification} · To: ${m.recipient}</span></div>`).join(''):'<div class="muted">No command messages yet.</div>';
+ document.getElementById('directiveList').innerHTML=directives.length?directives.map(d=>`<div class="row directive-card directive-${d.status}"><span class="track-id">${d.directive_no}</span> <span class="pill">${d.status.toUpperCase()}</span><br><b>${d.title}</b><br><span class="muted">${d.directive_type.replaceAll('_',' ')} · ${d.priority} · ${d.classification}<br>To: ${d.recipient}</span><br><span class="muted">${d.directive_text}</span><br><div style="margin-top:6px"><a class="action mini" target="_blank" href="/documents/directive/${d.id}" style="text-decoration:none">Official Document</a> ${d.status==='issued'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'acknowledged\')">Acknowledge</button> ':''}${['issued','acknowledged','planning','returned'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'planning\')">Planning</button> ':''}${['planning','returned'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'approved\')">Approve Plan</button> ':''}${['planning','approved'].includes(d.status)?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'returned\')">Return</button> ':''}${d.status==='approved'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'executing\')">Execution Status</button> ':''}${d.status==='executing'?'<button class="action mini" onclick="setDirectiveStatus('+d.id+',\'complete\')">Complete</button>':''}</div></div>`).join(''):'<div class="muted">No executive directives yet.</div>';
+ document.getElementById('commandMessageList').innerHTML=messages.length?messages.map(m=>`<div class="row"><span class="track-id">${m.message_no}</span><br><b>${m.subject}</b><br><span class="muted">${m.classification} · To: ${m.recipient}</span><br><a class="action mini" target="_blank" href="/documents/message/${m.id}" style="text-decoration:none">Official Document</a></div>`).join(''):'<div class="muted">No command messages yet.</div>';
 }
 async function setDirectiveStatus(id,status){
  const note=prompt('Status note (optional):','')||'';
@@ -890,7 +1021,7 @@ async function closeAlert(id){await api('/api/alerts/'+id+'/close',{method:'PATC
 async function syncDerivedAlerts(){await api('/api/alerts/sync-derived',{method:'POST'});await refreshAlerts()}
 async function refreshTasks(){
  const a=await api('/api/tasks');
- const html=a.length?a.map(t=>`<div class="row"><b>${t.title}</b> <span class="pill">${t.priority}</span><br><span class="muted">${t.owner} · ${t.domain} · ${t.status}</span> ${t.status!=='complete'?'<button class="action mini" onclick="finishTask('+t.id+')">Complete</button>':''}</div>`).join(''):'<div class="muted">No active command tasks — ready for assignment.</div>';
+ const html=a.length?a.map(t=>`<div class="row"><b>${t.title}</b> <span class="pill">${t.priority}</span><br><span class="muted">${t.owner} · ${t.domain} · ${t.status}</span> <a class="action mini" target="_blank" href="/documents/task/${t.id}" style="text-decoration:none">Document</a> ${t.status!=='complete'?'<button class="action mini" onclick="finishTask('+t.id+')">Complete</button>':''}</div>`).join(''):'<div class="muted">No active command tasks — ready for assignment.</div>';
  document.getElementById('taskList').innerHTML=html;document.getElementById('taskPreview').innerHTML=html;
 }
 async function finishTask(id){await api('/api/tasks/'+id+'?status=complete',{method:'PATCH'});refreshTasks()}
