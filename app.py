@@ -3,6 +3,10 @@ from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from datetime import datetime, timezone
 from typing import Literal, Optional
+import os
+import json
+import psycopg
+from psycopg.rows import dict_row
 
 app = FastAPI(title="UNG-NEPTUNE", version="0.1.0")
 
@@ -38,19 +42,110 @@ class CommUpdate(BaseModel):
     latency_ms: Optional[int] = None
     note: str = ""
 
-EVENTS = [
-    {"id":1,"domain":"joint","type":"system","title":"NEPTUNE Core online","source":"NEPTUNE","confidence":1.0,"classification":"UNCLASSIFIED","releasability":"INTERNAL","time":"now","x":31,"y":48},
-    {"id":2,"domain":"civilian","type":"readiness","title":"ICS profile available","source":"NEPTUNE","confidence":1.0,"classification":"UNCLASSIFIED","releasability":"INTERNAL","time":"now","x":62,"y":29},
-]
-TASKS = []
-READINESS = [
-    {"id":1,"name":"Core command node","category":"communications","status":"ready","note":"Primary services online","time":"now"},
-    {"id":2,"name":"Edge synchronization","category":"other","status":"limited","note":"Standing by for remote nodes","time":"now"},
-]
-COMMS = [
-    {"id":1,"link":"Core network","status":"healthy","latency_ms":18,"note":"Nominal","time":"now"},
-    {"id":2,"link":"Edge sync","status":"degraded","latency_ms":None,"note":"No remote edge peers connected","time":"now"},
-]
+DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+def db():
+    return psycopg.connect(DATABASE_URL, row_factory=dict_row)
+
+def init_db():
+    if not DATABASE_URL:
+        return
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""CREATE TABLE IF NOT EXISTS events(
+                id BIGSERIAL PRIMARY KEY,
+                domain TEXT NOT NULL,
+                type TEXT NOT NULL,
+                title TEXT NOT NULL,
+                source TEXT NOT NULL,
+                confidence DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+                classification TEXT NOT NULL DEFAULT 'UNCLASSIFIED',
+                releasability TEXT NOT NULL DEFAULT 'INTERNAL',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                x DOUBLE PRECISION,
+                y DOUBLE PRECISION,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
+                provenance JSONB NOT NULL DEFAULT '{}'::jsonb
+            )""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS tasks(
+                id BIGSERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                owner TEXT NOT NULL,
+                domain TEXT NOT NULL,
+                priority TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'open',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS readiness(
+                id BIGSERIAL PRIMARY KEY,
+                name TEXT NOT NULL,
+                category TEXT NOT NULL,
+                status TEXT NOT NULL,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS comms(
+                id BIGSERIAL PRIMARY KEY,
+                link TEXT NOT NULL,
+                status TEXT NOT NULL,
+                latency_ms INTEGER,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""")
+            cur.execute("""CREATE TABLE IF NOT EXISTS audit_log(
+                id BIGSERIAL PRIMARY KEY,
+                action TEXT NOT NULL,
+                entity_type TEXT NOT NULL,
+                entity_id TEXT,
+                details JSONB NOT NULL DEFAULT '{}'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )""")
+            cur.execute("SELECT COUNT(*) AS n FROM events")
+            if cur.fetchone()["n"] == 0:
+                cur.execute("""INSERT INTO events(domain,type,title,source,confidence,classification,releasability,x,y,provenance)
+                               VALUES
+                               ('joint','system','NEPTUNE Core online','NEPTUNE',1.0,'UNCLASSIFIED','INTERNAL',31,48,'{"seed":true}'::jsonb),
+                               ('civilian','readiness','ICS profile available','NEPTUNE',1.0,'UNCLASSIFIED','INTERNAL',62,29,'{"seed":true}'::jsonb)""")
+            cur.execute("SELECT COUNT(*) AS n FROM readiness")
+            if cur.fetchone()["n"] == 0:
+                cur.execute("""INSERT INTO readiness(name,category,status,note) VALUES
+                               ('Core command node','communications','ready','Primary services online'),
+                               ('Edge synchronization','other','limited','Standing by for remote nodes')""")
+            cur.execute("SELECT COUNT(*) AS n FROM comms")
+            if cur.fetchone()["n"] == 0:
+                cur.execute("""INSERT INTO comms(link,status,latency_ms,note) VALUES
+                               ('Core network','healthy',18,'Nominal'),
+                               ('Edge sync','degraded',NULL,'No remote edge peers connected')""")
+
+@app.on_event("startup")
+def startup():
+    init_db()
+
+def rows(query, params=()):
+    if not DATABASE_URL:
+        return []
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+def one(query, params=()):
+    if not DATABASE_URL:
+        return None
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            return cur.fetchone()
+
+def audit(action, entity_type, entity_id=None, details=None):
+    if not DATABASE_URL:
+        return
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("INSERT INTO audit_log(action,entity_type,entity_id,details) VALUES(%s,%s,%s,%s::jsonb)",
+                        (action, entity_type, str(entity_id) if entity_id is not None else None, json.dumps(details or {})))
 
 @app.get("/health")
 def health():
@@ -58,60 +153,92 @@ def health():
 
 @app.get("/api/events")
 def get_events():
-    return EVENTS[-100:]
+    return rows("""SELECT id,domain,type,title,source,confidence,classification,releasability,
+                         created_at AS time,x,y,latitude,longitude,provenance
+                  FROM events ORDER BY id DESC LIMIT 100""")[::-1]
 
 @app.post("/api/events")
 def add_event(event: Event):
     item = event.model_dump()
-    item["id"] = (EVENTS[-1]["id"] + 1) if EVENTS else 1
-    item["time"] = datetime.now(timezone.utc).isoformat()
-    EVENTS.append(item)
-    return item
+    if not DATABASE_URL:
+        return {"error":"database_unavailable"}
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO events(domain,type,title,source,confidence,classification,releasability,x,y,provenance)
+                           VALUES(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb)
+                           RETURNING id,domain,type,title,source,confidence,classification,releasability,created_at AS time,x,y,latitude,longitude,provenance""",
+                        (item["domain"],item["type"],item["title"],item["source"],item["confidence"],item["classification"],item["releasability"],item["x"],item["y"],json.dumps({"ingest":"api"})))
+            saved=cur.fetchone()
+    audit("create","event",saved["id"],{"title":saved["title"],"domain":saved["domain"]})
+    return saved
 
 @app.get("/api/tasks")
 def get_tasks():
-    return TASKS
+    return rows("SELECT id,title,owner,domain,priority,status,created_at,updated_at FROM tasks ORDER BY id")
 
 @app.post("/api/tasks")
 def add_task(task: Task):
-    item = task.model_dump()
-    item["id"] = (TASKS[-1]["id"] + 1) if TASKS else 1
-    item["created_at"] = datetime.now(timezone.utc).isoformat()
-    TASKS.append(item)
-    EVENTS.append({"id":(EVENTS[-1]["id"]+1) if EVENTS else 1,"domain":item["domain"],"type":"task","title":f'Task created: {item["title"]}',"source":"COMMAND","confidence":1.0,"classification":"UNCLASSIFIED","releasability":"INTERNAL","time":item["created_at"],"x":None,"y":None})
-    return item
+    item=task.model_dump()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO tasks(title,owner,domain,priority,status)
+                           VALUES(%s,%s,%s,%s,%s)
+                           RETURNING id,title,owner,domain,priority,status,created_at,updated_at""",
+                        (item["title"],item["owner"],item["domain"],item["priority"],item["status"]))
+            saved=cur.fetchone()
+            cur.execute("""INSERT INTO events(domain,type,title,source,confidence,classification,releasability,provenance)
+                           VALUES(%s,'task',%s,'COMMAND',1.0,'UNCLASSIFIED','INTERNAL',%s::jsonb)""",
+                        (saved["domain"],f'Task created: {saved["title"]}',json.dumps({"task_id":saved["id"]})))
+    audit("create","task",saved["id"],{"title":saved["title"],"owner":saved["owner"]})
+    return saved
 
 @app.patch("/api/tasks/{task_id}")
 def update_task(task_id: int, status: Literal["open","in_progress","complete"]):
-    for item in TASKS:
-        if item["id"] == task_id:
-            item["status"] = status
-            return item
-    return {"error":"not_found"}
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE tasks SET status=%s,updated_at=NOW() WHERE id=%s
+                           RETURNING id,title,owner,domain,priority,status,created_at,updated_at""",(status,task_id))
+            saved=cur.fetchone()
+    if not saved:
+        return {"error":"not_found"}
+    audit("update_status","task",task_id,{"status":status})
+    return saved
 
 @app.get("/api/readiness")
 def get_readiness():
-    return READINESS
+    return rows("SELECT id,name,category,status,note,created_at AS time FROM readiness ORDER BY id")
 
 @app.post("/api/readiness")
 def add_readiness(update: ReadinessUpdate):
-    item = update.model_dump()
-    item["id"] = (READINESS[-1]["id"] + 1) if READINESS else 1
-    item["time"] = datetime.now(timezone.utc).isoformat()
-    READINESS.append(item)
-    return item
+    item=update.model_dump()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO readiness(name,category,status,note) VALUES(%s,%s,%s,%s)
+                           RETURNING id,name,category,status,note,created_at AS time""",
+                        (item["name"],item["category"],item["status"],item["note"]))
+            saved=cur.fetchone()
+    audit("create","readiness",saved["id"],{"name":saved["name"],"status":saved["status"]})
+    return saved
 
 @app.get("/api/comms")
 def get_comms():
-    return COMMS
+    return rows("SELECT id,link,status,latency_ms,note,created_at AS time FROM comms ORDER BY id")
 
 @app.post("/api/comms")
 def add_comm(update: CommUpdate):
-    item = update.model_dump()
-    item["id"] = (COMMS[-1]["id"] + 1) if COMMS else 1
-    item["time"] = datetime.now(timezone.utc).isoformat()
-    COMMS.append(item)
-    return item
+    item=update.model_dump()
+    with db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO comms(link,status,latency_ms,note) VALUES(%s,%s,%s,%s)
+                           RETURNING id,link,status,latency_ms,note,created_at AS time""",
+                        (item["link"],item["status"],item["latency_ms"],item["note"]))
+            saved=cur.fetchone()
+    audit("create","comms",saved["id"],{"link":saved["link"],"status":saved["status"]})
+    return saved
+
+@app.get("/api/audit")
+def get_audit():
+    return rows("SELECT id,action,entity_type,entity_id,details,created_at FROM audit_log ORDER BY id DESC LIMIT 200")
 
 @app.get("/", response_class=HTMLResponse)
 def home():
