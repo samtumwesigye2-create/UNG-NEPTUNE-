@@ -1328,15 +1328,15 @@ def home():
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
-*{box-sizing:border-box}body{margin:0;background:#07111d;color:#eaf1f7;font-family:Arial,sans-serif}
+*{box-sizing:border-box}body{margin:0;color:#eaf1f7;font-family:Arial,sans-serif;background-image:linear-gradient(rgba(4,16,29,.70),rgba(4,16,29,.88)),url('https://statehouse.go.ug/wp-content/uploads/elementor/thumbs/Statehouse-night-1500x500-2-q9vxq9dyceh2kh2rboi8fllpgxf49dg9zigx1c9uh4.jpeg');background-position:center top;background-size:cover;background-repeat:no-repeat;background-attachment:fixed}
 .top{height:82px;background:linear-gradient(90deg,#071629,#0b3152);border-bottom:2px solid #bda251;display:flex;align-items:center;justify-content:space-between;padding:0 26px}
 .brand-wrap{display:flex;align-items:center;gap:14px}.brand-seal{width:64px;height:64px;border-radius:50%;object-fit:cover;border:2px solid #d2b65e;box-shadow:0 0 0 4px rgba(210,182,94,.12);background:#0a1a2b}.brand h1{margin:0;font:28px Georgia}.brand small{color:#d2b65e;letter-spacing:2px}
 .status{font-size:12px;color:#9fd6ad;border:1px solid #305748;padding:9px 12px;border-radius:9px;background:#09261d}
 .layout{display:grid;grid-template-columns:230px minmax(650px,1fr) 320px;min-height:calc(100vh - 82px)}
-aside{background:#091827;border-right:1px solid #20364b;padding:22px 16px}
+aside{background:rgba(9,24,39,.88);backdrop-filter:blur(3px);border-right:1px solid #20364b;padding:22px 16px}
 aside button{display:block;width:100%;text-align:left;color:#dce7f0;background:none;border:0;padding:11px;border-radius:8px;margin-bottom:5px;cursor:pointer}
 aside button:hover,aside button.active{background:#103252;color:#f0d071}
-main{padding:20px;background:#07111d}.executive-hero{background-image:linear-gradient(90deg,rgba(5,20,38,.78),rgba(8,31,52,.24)),url('https://statehouse.go.ug/wp-content/uploads/elementor/thumbs/Statehouse-night-1500x500-2-q9vxq9dyceh2kh2rboi8fllpgxf49dg9zigx1c9uh4.jpeg')!important;background-position:center!important;background-size:cover!important;background-repeat:no-repeat!important}.right{background:#091827e8;border-left:1px solid #20364b;padding:18px}
+main{padding:20px;background:transparent}.executive-hero{background-image:linear-gradient(90deg,rgba(5,20,38,.78),rgba(8,31,52,.24)),url('https://statehouse.go.ug/wp-content/uploads/elementor/thumbs/Statehouse-night-1500x500-2-q9vxq9dyceh2kh2rboi8fllpgxf49dg9zigx1c9uh4.jpeg')!important;background-position:center!important;background-size:cover!important;background-repeat:no-repeat!important}.right{background:#091827e8;border-left:1px solid #20364b;padding:18px}
 .executive-hero{min-height:190px;margin:-20px -20px 18px;padding:48px 28px 24px;display:flex;flex-direction:column;justify-content:flex-end;background:linear-gradient(90deg,rgba(5,20,38,.84),rgba(8,31,52,.22));border-bottom:1px solid #bda251}.executive-kicker{font-size:11px;letter-spacing:2.2px;color:#e3c769;font-weight:800}.executive-title{font:700 31px Georgia;color:#fff;margin-top:7px;text-shadow:0 2px 9px #000}.executive-sub{color:#c7d3dd;margin-top:6px}.strip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
 .metric,.panel{background:rgba(13,31,49,.92);border:1px solid #294159;border-radius:12px;padding:14px;backdrop-filter:blur(3px)}
 .metric b{display:block;font-size:20px;color:#f0d071}.metric span{font-size:11px;color:#9fb2c2}
