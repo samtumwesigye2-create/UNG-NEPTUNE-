@@ -1336,9 +1336,9 @@ def home():
 aside{background:#091827;border-right:1px solid #20364b;padding:22px 16px}
 aside button{display:block;width:100%;text-align:left;color:#dce7f0;background:none;border:0;padding:11px;border-radius:8px;margin-bottom:5px;cursor:pointer}
 aside button:hover,aside button.active{background:#103252;color:#f0d071}
-main{padding:20px}.right{background:#091827;border-left:1px solid #20364b;padding:18px}
-.strip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
-.metric,.panel{background:#0d1f31;border:1px solid #294159;border-radius:12px;padding:14px}
+main{padding:20px;background:linear-gradient(180deg,rgba(5,18,32,.52) 0,rgba(7,17,29,.96) 520px),url('https://statehouse.go.ug/wp-content/uploads/elementor/thumbs/Statehouse-night-1500x500-2-q9vxq9dyceh2kh2rboi8fllpgxf49dg9zigx1c9uh4.jpeg') center top/100% auto no-repeat}.right{background:#091827e8;border-left:1px solid #20364b;padding:18px}
+.executive-hero{min-height:190px;margin:-20px -20px 18px;padding:48px 28px 24px;display:flex;flex-direction:column;justify-content:flex-end;background:linear-gradient(90deg,rgba(5,20,38,.84),rgba(8,31,52,.22));border-bottom:1px solid #bda251}.executive-kicker{font-size:11px;letter-spacing:2.2px;color:#e3c769;font-weight:800}.executive-title{font:700 31px Georgia;color:#fff;margin-top:7px;text-shadow:0 2px 9px #000}.executive-sub{color:#c7d3dd;margin-top:6px}.strip{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin-bottom:14px}
+.metric,.panel{background:rgba(13,31,49,.92);border:1px solid #294159;border-radius:12px;padding:14px;backdrop-filter:blur(3px)}
 .metric b{display:block;font-size:20px;color:#f0d071}.metric span{font-size:11px;color:#9fb2c2}
 .map{height:430px;border:1px solid #31506b;border-radius:14px;position:relative;overflow:hidden;background:#0a2034}
 .map-title{position:absolute;top:15px;left:50px;color:#e4c76d;background:#07111ddd;padding:7px 10px;border-radius:7px;font:700 12px Arial;letter-spacing:1px;z-index:600}
@@ -1357,6 +1357,7 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 <button class="active" data-view="cop">Joint COP</button><button data-view="executive">Commander-in-Chief</button><button data-view="tracks">Live Tracks</button><button data-view="deconfliction">Deconfliction</button><button data-view="zones">Zones & Incursions</button><button data-view="alerts">Alert Center</button><button data-view="documents">Document Center</button><button data-view="tasks">Command & Tasks</button><button data-view="readiness">Readiness</button><button data-view="logistics">Logistics</button><button data-view="communications">Communications</button><button data-view="incidents">Intel / Incidents</button><button data-view="spectrum">Spectrum Health</button><button data-view="edge">Edge Nodes</button><button data-view="integrations">JANUS / VAULT</button><button data-view="audit">Audit & AAR</button>
 </aside>
 <main>
+<section class="executive-hero"><div class="executive-kicker">REPUBLIC OF UGANDA · EXECUTIVE COMMAND</div><div class="executive-title">SERVICE · SECURITY · NATIONAL READINESS</div><div class="executive-sub">Unified command awareness and resilient national coordination.</div></section>
 <div class="strip">
 <div class="metric"><b>7</b><span>DOMAIN PROFILES</span></div><div class="metric"><b class="good">ONLINE</b><span>CORE STATUS</span></div><div class="metric"><b id="criticalCount">0</b><span>CRITICAL ALERTS</span></div><div class="metric"><b>100%</b><span>DATA SERVICES</span></div><div class="metric"><b>EDGE</b><span>DEGRADED MODE READY</span></div>
 </div>
