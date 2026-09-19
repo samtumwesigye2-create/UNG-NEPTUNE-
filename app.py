@@ -460,6 +460,59 @@ def audit_document(audit_id: int):
                   "Recorded":a["created_at"]}
     ))
 
+@app.get("/api/documents")
+def document_registry():
+    docs=[]
+    for d in rows("""SELECT id,directive_no AS ref,title,classification,status,issued_at AS created_at
+                     FROM executive_directives ORDER BY issued_at DESC LIMIT 100"""):
+        docs.append({"kind":"directive","id":d["id"],"reference":d["ref"],"title":d["title"],
+                     "classification":d["classification"],"status":d["status"],"created_at":d["created_at"],
+                     "agency":"Office of the President / Commander-in-Chief",
+                     "url":f"/documents/directive/{d['id']}"})
+    for m in rows("""SELECT id,message_no AS ref,subject AS title,classification,status,created_at
+                     FROM command_messages ORDER BY created_at DESC LIMIT 100"""):
+        docs.append({"kind":"message","id":m["id"],"reference":m["ref"],"title":m["title"],
+                     "classification":m["classification"],"status":m["status"],"created_at":m["created_at"],
+                     "agency":"Executive Office of the President",
+                     "url":f"/documents/message/{m['id']}"})
+    for t in rows("""SELECT id,title,domain,status,created_at FROM tasks ORDER BY created_at DESC LIMIT 100"""):
+        agency = "UPDF"
+        if t["domain"]=="air": agency="UPDF Air Force"
+        elif t["domain"]=="land": agency="UPDF Land Forces"
+        elif t["domain"]=="maritime": agency="UPDF Maritime / Lake Security"
+        docs.append({"kind":"task","id":t["id"],"reference":f"TASK-{t['id']:06d}","title":t["title"],
+                     "classification":"RESTRICTED","status":t["status"],"created_at":t["created_at"],
+                     "agency":agency,"url":f"/documents/task/{t['id']}"})
+    for e in rows("""SELECT id,title,domain,classification,created_at FROM events ORDER BY created_at DESC LIMIT 100"""):
+        agency = "National Security Council"
+        if e["domain"]=="air": agency="UPDF Air Force"
+        elif e["domain"]=="land": agency="UPDF Land Forces"
+        elif e["domain"]=="maritime": agency="UPDF Maritime / Lake Security"
+        docs.append({"kind":"event","id":e["id"],"reference":f"EVT-{e['id']:06d}","title":e["title"],
+                     "classification":e["classification"],"status":"recorded","created_at":e["created_at"],
+                     "agency":agency,"url":f"/documents/event/{e['id']}"})
+    for r in rows("""SELECT id,name,category,status,created_at FROM readiness ORDER BY created_at DESC LIMIT 100"""):
+        docs.append({"kind":"readiness","id":r["id"],"reference":f"RDY-{r['id']:06d}",
+                     "title":f"Readiness Report — {r['name']}","classification":"RESTRICTED","status":r["status"],
+                     "created_at":r["created_at"],"agency":"Uganda Peoples' Defence Forces",
+                     "url":f"/documents/readiness/{r['id']}"})
+    for r in rows("""SELECT id,link,status,created_at FROM comms ORDER BY created_at DESC LIMIT 100"""):
+        docs.append({"kind":"communications","id":r["id"],"reference":f"COM-{r['id']:06d}",
+                     "title":f"Communications Status — {r['link']}","classification":"RESTRICTED","status":r["status"],
+                     "created_at":r["created_at"],"agency":"Ministry of Defence / UPDF",
+                     "url":f"/documents/comms/{r['id']}"})
+    for a in rows("""SELECT id,title,severity,status,created_at FROM alerts ORDER BY created_at DESC LIMIT 100"""):
+        docs.append({"kind":"alert","id":a["id"],"reference":f"ALT-{a['id']:06d}","title":a["title"],
+                     "classification":"RESTRICTED","status":a["status"],"created_at":a["created_at"],
+                     "agency":"National Security Council","url":f"/documents/alert/{a['id']}"})
+    for a in rows("""SELECT id,action,entity_type,created_at FROM audit_log ORDER BY created_at DESC LIMIT 100"""):
+        docs.append({"kind":"audit","id":a["id"],"reference":f"AUD-{a['id']:06d}",
+                     "title":f"Audit Record — {a['action']}","classification":"RESTRICTED","status":"recorded",
+                     "created_at":a["created_at"],"agency":"Executive Office of the President",
+                     "url":f"/documents/audit/{a['id']}"})
+    docs.sort(key=lambda x:x["created_at"], reverse=True)
+    return docs[:300]
+
 @app.get("/health")
 def health():
     return {"ok": True, "system": "UNG-NEPTUNE", "version": "0.1.0"}
@@ -1040,6 +1093,15 @@ async function refreshZones(){
  const alerts=data.alerts||[];
  document.getElementById('zoneAlerts').innerHTML=alerts.length?alerts.map(a=>`<div class="row"><span class="pill conflict-warning">PREDICTED ENTRY</span> <span class="track-id">${a.track_id}</span><br><b>${a.zone_name}</b><br><span class="muted">${a.minutes_to_entry===0?'inside zone now':'entry in '+a.minutes_to_entry+' min'} · ${a.zone_type}</span></div>`).join(''):'<div class="good">No predicted zone incursions in current horizon.</div>';
 }
+let documentCache=[];
+function renderDocuments(){
+ const mode=document.getElementById('docFilter')?.value||'all';
+ const list=mode==='all'?documentCache:documentCache.filter(d=>d.kind===mode);
+ const el=document.getElementById('documentRegistry');
+ if(!el)return;
+ el.innerHTML=list.length?list.map(d=>`<div class="row"><span class="track-id">${d.reference}</span> <span class="pill">${d.kind.toUpperCase()}</span><br><b>${d.title}</b><br><span class="muted">${d.agency} · ${d.classification} · ${d.status} · ${new Date(d.created_at).toLocaleString()}</span><br><a class="action mini" target="_blank" href="${d.url}" style="text-decoration:none">Open Official Document</a></div>`).join(''):'<div class="muted">No documents in this view.</div>';
+}
+async function refreshDocuments(){documentCache=await api('/api/documents');renderDocuments()}
 let directiveCache=[];
 async function refreshExecutive(){
  const [brief,directives,messages]=await Promise.all([api('/api/executive/brief'),api('/api/executive/directives'),api('/api/executive/messages')]);
@@ -1098,8 +1160,8 @@ async function refreshAudit(){
  el.innerHTML=a.length?a.map(x=>`<div class="row"><span class="track-id">AUD-${String(x.id).padStart(6,'0')}</span> <b>${x.action}</b><br><span class="muted">${x.entity_type} · ${x.entity_id||'—'} · ${new Date(x.created_at).toLocaleString()}</span><br><a class="action mini" target="_blank" href="/documents/audit/${x.id}" style="text-decoration:none">Official Document</a></div>`).join(''):'<div class="muted">No audit records yet.</div>';
 }
 async function refreshIntegrations(){const x=await api('/api/integrations');for(const n of ['iam','vault']){const e=x[n],el=document.getElementById(n+'Status');el.innerHTML=e.online?'<span class="good">ONLINE</span> · connected':'<span class="bad">OFFLINE</span> · '+(e.configured?'configured':'not configured')}}
-initMap();renderDomains();renderSimulation();saveQueue(queued());Promise.all([refreshEvents(),refreshTracks(),refreshDeconfliction(),refreshZones(),refreshAlerts(),refreshExecutive(),refreshTasks(),refreshReadiness(),refreshComms(),refreshAudit(),refreshIntegrations()]);flushOffline();
-setInterval(()=>Promise.all([refreshEvents(),refreshTracks(),refreshDeconfliction(),refreshAlerts(),refreshExecutive(),refreshTasks(),refreshReadiness(),refreshComms(),refreshAudit(),refreshIntegrations()]),5000);
+initMap();renderDomains();renderSimulation();saveQueue(queued());Promise.all([refreshEvents(),refreshTracks(),refreshDeconfliction(),refreshZones(),refreshAlerts(),refreshExecutive(),refreshTasks(),refreshReadiness(),refreshComms(),refreshAudit(),refreshDocuments(),refreshIntegrations()]);flushOffline();
+setInterval(()=>Promise.all([refreshEvents(),refreshTracks(),refreshDeconfliction(),refreshAlerts(),refreshExecutive(),refreshTasks(),refreshReadiness(),refreshComms(),refreshAudit(),refreshDocuments(),refreshIntegrations()]),5000);
 """
 
 @app.get("/app.js")
@@ -1236,6 +1298,7 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 <div class="row"><b>Institution Header</b><br><span class="muted">Automatically selected from Office of the President, Ministry of Defence, UPDF, National Security Council, State House, Executive Office, or military branch.</span></div>
 <div class="row"><b>Document Identity</b><br><span class="muted">Tracking number · classification · recipient · status · timestamps · issuing authority</span></div>
 <div class="row"><b>Output</b><br><span class="muted">Official print view with Print / Save PDF.</span></div>
+<div class="row"><b>Automatic Registry</b><br><span class="good">Every generated record is indexed by tracking number and issuing authority.</span></div>
 </div>
 <div class="panel"><h3>Agency / Branch Mapping</h3>
 <div class="row"><b>Presidential Directives</b><br><span class="muted">Office of the President · Commander-in-Chief</span></div>
@@ -1243,7 +1306,9 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 <div class="row"><b>Air / Land / Maritime Records</b><br><span class="muted">UPDF · relevant branch</span></div>
 <div class="row"><b>Security / Incident Records</b><br><span class="muted">National Security Council</span></div>
 <div class="row"><b>Executive Messages</b><br><span class="muted">Executive Office of the President</span></div>
-</div></div></section>
+</div></div>
+<div class="panel" style="margin-top:12px"><div class="toolbar"><h3>Official Document Registry</h3><select id="docFilter" onchange="renderDocuments()" style="max-width:180px"><option value="all">All documents</option><option value="directive">Directives</option><option value="message">Messages</option><option value="task">Tasks</option><option value="event">Events</option><option value="readiness">Readiness</option><option value="communications">Communications</option><option value="alert">Alerts</option><option value="audit">Audit</option></select></div><div id="documentRegistry"></div></div>
+</section>
 
 <section id="tasks" class="view"><div class="grid">
 <div class="panel"><h3>Create Command Task</h3><form id="taskForm"><input name="title" placeholder="Task title" required><input name="owner" placeholder="Owner / team" required><select name="domain"><option>joint</option><option>land</option><option>air</option><option>maritime</option><option>space</option><option>cyber</option><option>civilian</option></select><select name="priority"><option>normal</option><option>high</option><option>critical</option><option>low</option></select><button class="action">Create Task</button></form></div>
