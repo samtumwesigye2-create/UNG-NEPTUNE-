@@ -925,7 +925,7 @@ def client_js():
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return HTMLResponse(""", headers={"Cache-Control":"no-store, max-age=0, must-revalidate"})<!doctype html>
+    return HTMLResponse("""<!doctype html>
 <html><head><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>UNG-NEPTUNE</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -1066,5 +1066,5 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 <section id="audit" class="view"><div class="panel"><h3>Audit & After-Action Review</h3><p class="muted">Operational events, task creation, readiness updates, and communications changes are retained in the live event/data stores for this first build. Persistent audit storage is the next backend hardening step.</p></div></section>
 </main>
 
-<div class="right"><div class="toolbar"><h3 style="color:#f0d071">Live Event Stream</h3><span class="pill" id="eventCount">0 EVENTS</span></div><div id="eventStream"></div><h3 style="color:#f0d071;margin-top:24px">Design Rules</h3><div class="alert">Human authorization required for high-consequence actions.</div><div class="alert">MOSA / open API architecture.</div><div class="alert">Zero-trust / MLS-ready data labels.</div></div<script src="/app.js" defer></script>
-</script></body></html>""")
+<div class="right"><div class="toolbar"><h3 style="color:#f0d071">Live Event Stream</h3><span class="pill" id="eventCount">0 EVENTS</span></div><div id="eventStream"></div><h3 style="color:#f0d071;margin-top:24px">Design Rules</h3><div class="alert">Human authorization required for high-consequence actions.</div><div class="alert">MOSA / open API architecture.</div><div class="alert">Zero-trust / MLS-ready data labels.</div></div><script src="/app.js" defer></script>
+</body></html>""", headers={"Cache-Control":"no-store, max-age=0, must-revalidate"})
