@@ -10,6 +10,7 @@ import html
 import json
 import httpx
 import psycopg
+from messaging import publish_event, enqueue
 from psycopg.rows import dict_row
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib import colors
@@ -672,7 +673,7 @@ def get_events():
                   FROM events ORDER BY id DESC LIMIT 100""")[::-1]
 
 @app.post("/api/events")
-def add_event(event: Event):
+async def add_event(event: Event):
     item = event.model_dump()
     if not DATABASE_URL:
         return {"error":"database_unavailable"}
@@ -684,6 +685,7 @@ def add_event(event: Event):
                         (item["domain"],item["type"],item["title"],item["source"],item["confidence"],item["classification"],item["releasability"],item["x"],item["y"],item["latitude"],item["longitude"],json.dumps({"ingest":"api"})))
             saved=cur.fetchone()
     audit("create","event",saved["id"],{"title":saved["title"],"domain":saved["domain"]})
+    await publish_event("events","event.created",dict(saved),saved["classification"],saved["releasability"])
     return saved
 
 @app.get("/api/tracks")
@@ -1025,7 +1027,7 @@ def get_tasks():
     return rows("SELECT id,title,owner,domain,priority,status,created_at,updated_at FROM tasks ORDER BY id")
 
 @app.post("/api/tasks")
-def add_task(task: Task):
+async def add_task(task: Task):
     item=task.model_dump()
     with db() as conn:
         with conn.cursor() as cur:
@@ -1038,10 +1040,12 @@ def add_task(task: Task):
                            VALUES(%s,'task',%s,'COMMAND',1.0,'UNCLASSIFIED','INTERNAL',%s::jsonb)""",
                         (saved["domain"],f'Task created: {saved["title"]}',json.dumps({"task_id":saved["id"]})))
     audit("create","task",saved["id"],{"title":saved["title"],"owner":saved["owner"]})
+    await publish_event("tasks","task.created",dict(saved))
+    await enqueue("workflow",{"event_type":"task.created","task":dict(saved)})
     return saved
 
 @app.patch("/api/tasks/{task_id}")
-def update_task(task_id: int, status: Literal["open","in_progress","complete"]):
+async def update_task(task_id: int, status: Literal["open","in_progress","complete"]):
     with db() as conn:
         with conn.cursor() as cur:
             cur.execute("""UPDATE tasks SET status=%s,updated_at=NOW() WHERE id=%s
@@ -1050,6 +1054,8 @@ def update_task(task_id: int, status: Literal["open","in_progress","complete"]):
     if not saved:
         return {"error":"not_found"}
     audit("update_status","task",task_id,{"status":status})
+    await publish_event("tasks","task.status_changed",dict(saved))
+    await enqueue("workflow",{"event_type":"task.status_changed","task":dict(saved)})
     return saved
 
 @app.get("/api/readiness")
