@@ -1484,3 +1484,53 @@ input,select,textarea{width:100%;background:#07131f;color:#eef3f8;border:1px sol
 
 <div class="right"><div class="toolbar"><h3 style="color:#f0d071">Live Event Stream</h3><span class="pill" id="eventCount">0 EVENTS</span></div><div id="eventStream"></div><h3 style="color:#f0d071;margin-top:24px">Design Rules</h3><div class="alert">Human authorization required for high-consequence actions.</div><div class="alert">MOSA / open API architecture.</div><div class="alert">Zero-trust / MLS-ready data labels.</div></div><script src="/app.js" defer></script>
 </body></html>""", headers={"Cache-Control":"no-store, max-age=0, must-revalidate"})
+
+
+# Messaging acceptance endpoint: synthetic broker round-trip only; no operational/Postgres data.
+@app.get("/health/messaging")
+async def messaging_health():
+    import asyncio, uuid
+    result = {"kafka": {"pass": False}, "rabbitmq": {"pass": False}}
+    test_id = "neptune-selftest-" + str(uuid.uuid4())
+    kafka = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "")
+    rabbit = os.getenv("RABBITMQ_URL", "")
+    if kafka:
+        try:
+            from aiokafka import AIOKafkaProducer, AIOKafkaConsumer
+            topic = "neptune.selftest.v1"
+            producer = AIOKafkaProducer(bootstrap_servers=kafka)
+            await asyncio.wait_for(producer.start(), 8)
+            try:
+                await asyncio.wait_for(producer.send_and_wait(topic, json.dumps({"id": test_id}).encode()), 8)
+            finally:
+                await producer.stop()
+            consumer = AIOKafkaConsumer(topic, bootstrap_servers=kafka, auto_offset_reset="earliest", enable_auto_commit=False, consumer_timeout_ms=5000)
+            await asyncio.wait_for(consumer.start(), 8)
+            try:
+                async def _find():
+                    async for msg in consumer:
+                        if json.loads(msg.value.decode()).get("id") == test_id: return True
+                    return False
+                result["kafka"] = {"pass": bool(await asyncio.wait_for(_find(), 8)), "topic": topic}
+            finally:
+                await consumer.stop()
+        except Exception as exc:
+            result["kafka"] = {"pass": False, "error": type(exc).__name__}
+    else: result["kafka"] = {"pass": False, "error": "not_configured"}
+    if rabbit:
+        try:
+            import aio_pika
+            conn = await asyncio.wait_for(aio_pika.connect_robust(rabbit), 8)
+            try:
+                ch = await conn.channel()
+                q = await ch.declare_queue("neptune.selftest.v1", durable=True)
+                await ch.default_exchange.publish(aio_pika.Message(body=json.dumps({"id": test_id}).encode(), delivery_mode=aio_pika.DeliveryMode.PERSISTENT), routing_key=q.name)
+                msg = await asyncio.wait_for(q.get(fail=False), 8)
+                ok = bool(msg and json.loads(msg.body.decode()).get("id") == test_id)
+                if msg: await msg.ack()
+                result["rabbitmq"] = {"pass": ok, "queue": q.name}
+            finally: await conn.close()
+        except Exception as exc:
+            result["rabbitmq"] = {"pass": False, "error": type(exc).__name__}
+    result["pass"] = result["kafka"]["pass"] and result["rabbitmq"]["pass"]
+    return result
